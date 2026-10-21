@@ -1,0 +1,64 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.env
+.venv
+env.bak/
+venv.bak/
+
+# IDE 编辑器缓存
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 日志、临时文件
+*.log
+*.tmp
+*.cache
+.cache/
+
+# 密钥、环境变量（关键！防止上传API Key）
+.env
+.env.local
+.env.production
+secrets.json
+
+# Jupyter Notebook
+#.ipynb_checkpoints/
+#*.ipynb
+
+# LangChain / OpenAI 缓存
+.langchain_cache/
+chroma_db/
+vector_store/
+
+# ruff缓存
+.ruff_cache
+
+# 其他忽略文件
+data/

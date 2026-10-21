@@ -1,0 +1,94 @@
+# ===================== 构建后端：使项目可被安装 =====================
+# 缺少 [build-system] 时，uv 会把本项目视为「虚拟项目」，只装依赖、不装自身，
+# 导致必须依赖 cwd 才能 import。声明构建后端后，uv sync 会以 editable 方式
+# 安装本项目，src/ 被写入 site-packages 的路径文件，从任意目录均可导入。
+[build-system]
+# requires：构建项目所需的依赖，在隔离环境中安装，不污染 .venv
+requires = ["hatchling"]
+# build-backend：实际执行构建的后端入口
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# packages：wheel 中包含的包路径，对外暴露为顶层包 llm_app
+packages = ["src/llm_app"]
+
+[project]
+name = "llm-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.20.0",
+    "bcrypt>=5.0.0",
+    "dotenv>=0.9.9",
+    "fastapi>=0.141.1",
+    "ipywidgets>=8.1.9",
+    "jupyterlab>=4.6.3",
+    "langchain>=1.4.2",
+    "numpy>=2.4.6",
+    "pandas>=3.0.6",
+    "passlib[bcrypt]>=1.7.4",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic-settings>=2.15.0",
+    "pyjwt>=2.14.0",
+    "python-jose>=3.5.0",
+    "python-multipart>=0.0.32",
+    "requests>=2.34.2",
+    "sqlalchemy>=2.1.4",
+    "torch>=2.14.0",
+    "transformers>=5.17.0",
+    "uvicorn>=0.54.0",
+    "zai-sdk>=0.2.3",
+]
+
+[dependency-groups]
+dev = [
+    "watchfiles>=1.3.0",
+]
+
+# ===================== Ruff：格式化 & Lint =====================
+# [tool.ruff] 是 Ruff 工具的全局配置
+[tool.ruff]
+# line-length：每行代码的最大字符数，超过此长度会触发 lint 警告
+line-length = 99
+# target-version：目标 Python 版本，Ruff 会据此启用对应版本的语法检查
+target-version = "py311"
+
+# [tool.ruff.format] 配置代码格式化规则
+[tool.ruff.format]
+# quote-style：字符串引号风格，single 表示优先使用单引号
+quote-style = "single"
+# indent-style：缩进风格，space 表示使用空格而非 Tab
+indent-style = "space"
+# line-ending：换行符风格，lf 表示使用 Unix 风格的 \n（Windows 为 \r\n）
+line-ending = "lf"
+
+# [tool.ruff.lint] 配置代码检查（lint）规则
+[tool.ruff.lint]
+# select：启用的 lint 规则类别列表，每个字母代表一类检查
+select = [
+  "E", "W",   # PEP8 基础规范：E 是错误，W 是警告（如缩进、空格、换行）
+  "F",        # 语法/未定义错误：Pyflakes 规则，检测未使用导入、未定义变量等
+  "I",        # 导入排序：isort 规则，自动排序和分组 import 语句
+  "B",        # 常见Bug风险：flake8-bugbear 规则，检测潜在的错误模式
+  "SIM",      # 简化冗余代码：flake8-simplify 规则，提示可简化的代码写法
+  "RUF",      # Ruff内置优化：Ruff 特有的规则，如检测不必要的类型转换
+  "UP",       # 自动现代化Python语法：pyupgrade 规则，自动使用新语法特性
+  "C",        # 推荐添加：检查不必要的复杂写法（如 dict 字面量）
+]
+# 修复：删除 ，因为 line-length 已生效
+# ignore：禁用的具体规则列表，这些规则即使被 select 启用也会被忽略
+ignore = [
+  "RUF003",  # 忽略：注释中包含特殊字符的警告（如 emoji）
+  "RUF001",  # 忽略：字符串中包含歧义字符的警告（如引号混用）
+  "RUF002",  # 忽略：文档字符串中包含歧义字符的警告
+  "E501",    # 忽略：行长度超限警告（已由 line-length 配置控制格式化）
+  "E402",    # 忽略：模块级 import 不在文件顶部的警告（Jupyter Notebook 常见）
+  "F401",    # 忽略：导入了但未使用的警告（某些导出模块需要保留导入）
+]
+
+# [tool.ruff.lint.isort] 配置 import 排序的具体行为
+[tool.ruff.lint.isort]
+# split-on-trailing-comma：在 import 语句末尾有逗号时，强制每个导入独占一行
+split-on-trailing-comma = true
