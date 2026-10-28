@@ -127,3 +127,65 @@ token，是否值得常驻生产依赖需要决策。
 2. **配置收敛方向**：是否按 CLAUDE.md 统一到 pydantic-settings（会牵动 `auth.py`、`chat_token_test.py`）。
 3. **`transformers` 宿命**：保留（精度优先）还是换成 `tiktoken`/估算（镜像体积优先）。
 4. **会话管理**：本次是否一并实现 `session_manager.py`（当前是空文件）。
+
+---
+
+# 状态复核 2026-10-28（提交 `7d2696c` + 未提交改动）
+
+复核方式：`git log` / `git diff --stat` + 读取当前 `app.py`(352 行)、`auth.py`、`config.py`、
+`common_function.py`、`common_class.py`、最新迁移、`static/**`；`uv run python -c "import
+llm_app.server.app"` 实测通过（`IMPORT_OK`）。
+
+## 已关闭
+| 编号 | 结论 | 证据 |
+|------|------|------|
+| F1 | 已修复 | `app.py` 字符串块已删除，`uv run python -c "import llm_app.server.app"` → `IMPORT_OK` |
+| F3（DB 层） | 已修复 | 迁移 `20261020_1040_dfb7606ad607` 重建 `ix_users_user_name(unique=True)` |
+
+## 新增（本轮复核发现，按严重度排序）
+
+### N1. `GET /api/test` 未鉴权返回全部用户 token（安全，建议最高优先级）
+`app.py:89-96` 直接返回进程内字典 `user_map_id`，其中 `LoginInfo` 含每个用户的 JWT。
+该路由**无 `Depends(get_current_user)`**，任何未登录者请求即可拿到所有有效 token，
+等价于完全绕过认证。
+**处理**：删除 `/api/test`、`/api/debug/users` 与 `user_map_id`（token 不应服务端留存；
+`app.py:138-148` 的写入一并删除）。若确需调试接口，加鉴权 + 仅 DEBUG 环境注册。
+
+### N2. SSE `media_type` 拼写错误
+`app.py:345` 为 `media_type='text/envent-stream'`（`envent` → `event`）。浏览器
+`EventSource` 严格要求 `text/event-stream`，部分代理也会拒绝该类型。
+**处理**：改为 `'text/event-stream'`。
+
+### N3. 前端发送功能仍是空壳
+`static/js/chat.js:159-162` 的 `sendMessage()` 只 `console.log`，未调用 `/api/chat/stream`；
+同时项目**没有读取历史消息的接口**（只有 `chat_messages` 表与模型，无
+`GET /api/sessions/{id}/messages`）。刷新页面后历史对话无法回显。
+
+### N4. 静态站点无根路径入口
+`app.mount('/static', ...)` 已挂载，但未注册 `/` → 访问 `http://host:8000/` 返回 404，
+必须手动访问 `/static/index.html`。
+
+### N5. 注册并发仍会 500
+DB 唯一索引已就位，但 `app.py:106-116` 仍只做应用层预检，未捕获 `IntegrityError`；
+并发注册时后到者会抛未处理异常返回 500，而非约定的 409。
+
+## 仍开放（原编号）
+| 编号 | 现状 |
+|------|------|
+| F2 | `auth.py:25-33` 仍在 import 期 `int(os.getenv(...))`；无 `.env.example` |
+| F4 | `SECRET_KEY` 缺失时仍静默得到 `''` 并可用于签名 |
+| F5 | `common_class.py:48` 仍把 `timeout` 放进 payload；`requests.post` 仍无 `timeout=` |
+| F7 | `common_function.py:113` 循环条件仍为 `len(self.history) > 0`，单条超限时会把刚 append 的消息淘汰 |
+| F8 | `common_function.py:113` 仍用 `print` 记录裁剪；`main.py:2` 脚手架 print 仍在 |
+| F9 | `chat_token_test.py:50-51` 仍为 `except Exception` + `print` |
+| F10 | `chat_token_test.py` 仍在包内且导入期构造 tokenizer |
+| F11 | `auth.py` 仍 `load_dotenv` + `os.getenv`，与 `core/config.py` 双轨 |
+| F12 | `secert_key`、`msessages`、文档串 `ture or false` 仍在 |
+| F13 | 仍无 `tests/`、`.env.example`、pre-commit；`session_manager.py` 仍为空 |
+| F14 | `torch`/`transformers` 仍为生产依赖（已改懒加载，但仍常驻） |
+
+## 修复良好、无需改动
+- `schemas/base.py` 的 `APIModel`（camelCase 别名 + `extra='forbid'`）与前端 `chat.js`
+  使用的 `userId` / `sessionId` / `sessionName` / `createdAt` 契约一致。
+- `lifespan` 预热 + `lru_cache` 懒加载 tokenizer，避免了 import 期下载权重（部分缓解 F10）。
+- `_load_memory` 双重检查锁、`_save_assistant_message` 限定捕获 `SQLAlchemyError`，符合规范。

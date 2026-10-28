@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 
 import httpx
 from cachetools import TTLCache
 from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import exists, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,10 +28,51 @@ from llm_app.models import models
 from llm_app.schemas import schemas
 from llm_app.server.auth import create_access_token, encode_pwd, get_current_user, verify_pwd
 from llm_app.utils.common_class import CommonLlmApi
-from llm_app.utils.common_function import TokenSlidingChatMemory
+from llm_app.utils.common_function import TokenSlidingChatMemory, warm_up_tokenizer
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title='LLM Chat Server')
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+    """启动时预热 tokenizer，将加载开销移出首个对话请求。
+
+    Args:
+        _app: FastAPI 应用实例（lifespan 协议要求，未使用）。
+
+    Yields:
+        None: 应用运行期间的控制权。
+    """
+    try:
+        # 同步加载会阻塞事件循环，放到线程池执行；此时尚未开始接收请求。
+        await asyncio.to_thread(warm_up_tokenizer)
+    except (OSError, ValueError):
+        # 预热失败不应阻止服务启动，首个对话请求会重新尝试并暴露真实错误。
+        logger.warning('tokenizer 预热失败', exc_info=True)
+    yield
+
+
+app = FastAPI(title='LLM Chat Server', lifespan=lifespan, docs_url=None)
+static_dir = Path(__file__).parent.parent / 'static'
+app.mount('/static', StaticFiles(directory=str(static_dir), html=True), name='static')
+
+
+@app.get('/docs', include_in_schema=False)
+def custom_swagger_ui() -> HTMLResponse:
+    """使用本地静态资源渲染 Swagger UI。
+
+    默认页面依赖 jsdelivr CDN，国内网络常无法访问导致白屏。
+    这里改为加载 ``static/swagger`` 下的本地文件，完全离线可用。
+
+    Returns:
+        HTMLResponse: Swagger UI 页面。
+    """
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url or '/openapi.json',
+        title=f'{app.title} - Swagger UI',
+        swagger_js_url='/static/swagger/swagger-ui-bundle.js',
+        swagger_css_url='/static/swagger/swagger-ui.css',
+    )
 
 
 class LoginInfo(BaseModel):
@@ -120,7 +166,7 @@ def login(
             }
         )
     return schemas.LoginResponse(
-        userid=res_user.user_id,
+        user_id=res_user.user_id,
         username=res_user.user_name,
         token=access_token,
     )
@@ -315,7 +361,7 @@ def chat_stream(
             db=db,
             current_user=current_user,
         ),
-        media_type='text/envent-stream',
+        media_type='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',

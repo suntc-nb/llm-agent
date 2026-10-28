@@ -1,32 +1,34 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from llm_app.schemas.base import APIModel
 
 
-class UserInfo(BaseModel):
+class UserInfo(APIModel):
     username: str
     password: str
     email: str = ''
     phone: str = ''
 
 
-class LoginRegister(BaseModel):
+class LoginRegister(APIModel):
     username: str
     password: str
 
 
-class LoginResponse(BaseModel):
-    userid: str
+class LoginResponse(APIModel):
+    user_id: str
     username: str
     token: str
 
 
-class SessionCreate(BaseModel):
+class SessionCreate(APIModel):
     session_name: str = '新会话'
 
 
-class SessionResponse(BaseModel):
+class SessionResponse(APIModel):
     session_id: str
     session_name: str
     user_id: str
@@ -34,11 +36,11 @@ class SessionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ChatMessageCreate(BaseModel):
+class ChatMessageCreate(APIModel):
     content: str
 
 
-class ChatMessageResponse(BaseModel):
+class ChatMessageResponse(APIModel):
     message_id: str
     session_id: str
     role: Literal['system', 'user', 'assistant', 'tool', 'function'] = Field(
@@ -50,6 +52,6 @@ class ChatMessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ChatRequest(BaseModel):
+class ChatRequest(APIModel):
     session_id: str
     content: str

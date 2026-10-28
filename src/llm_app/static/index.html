@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Chat</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <!-- 登录页面 -->
+    <div id="login-page" class="page">
+        <div class="login-container">
+            <h2>登录</h2>
+            <input type="text" id="login-username" placeholder="用户名">
+            <input type="password" id="login-password" placeholder="密码">
+            <button onclick="login()">登录</button>
+            <p>还没有账号？<a href="#" onclick="showRegister()">注册</a></p>
+        </div>
+    </div>
+
+    <!-- 注册页面 -->
+    <div id="register-page" class="page" style="display: none;">
+        <div class="login-container">
+            <h2>注册</h2>
+            <input type="text" id="register-username" placeholder="用户名">
+            <input type="password" id="register-password" placeholder="密码">
+            <button onclick="register()">注册</button>
+            <p>已有账号？<a href="#" onclick="showLogin()">登录</a></p>
+        </div>
+    </div>
+
+    <!-- 聊天主页面 -->
+    <div id="chat-page" class="page" style="display: none;">
+        <!-- 左侧会话列表 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>会话列表</h3>
+                <button onclick="createSession()">+ 新建</button>
+            </div>
+            <div id="session-list"></div>
+        </div>
+
+        <!-- 右侧聊天区域 -->
+        <div class="chat-container">
+            <div id="chat-messages"></div>
+            <div class="chat-input">
+                <input type="text" id="message-input" placeholder="输入消息...">
+                <button onclick="sendMessage()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/chat.js"></script>
+</body>
+
+</html>
