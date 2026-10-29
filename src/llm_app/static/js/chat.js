@@ -50,6 +50,7 @@ async function login() {
     localStorage.setItem('userId', data.userId)
     localStorage.setItem('username', data.username)
     showChat();
+    await loadSessions();
 }
 
 async function register() {
@@ -143,7 +144,13 @@ async function loadSessions() {
     });
 }
 
-function selectSession(sessionId, sessionName, element) {
+async function selectSession(sessionId, sessionName, element) {
+
+    // 在 selectSession 开头加
+    if (currentStreamAbortController) {
+        currentStreamAbortController.abort('切换会话');
+        currentStreamAbortController = null;
+    }
     // 1. 保存当前会话 ID
     currentSessionId = sessionId;
     // 2. 情况当前聊天区域
@@ -153,10 +160,25 @@ function selectSession(sessionId, sessionName, element) {
         item.classList.remove('active')
     })
     element.classList.add('active');
-    console.log('点击事件触发', currentSessionId)
+
+    //加载历史消息,并渲染
+    try {
+        const messages = await loadMessages(sessionId);
+        if (!messages) {
+            return;
+        }
+        for (const msg of messages) {
+            appendMessage(msg.role, msg.content, msg.createdAt);
+        }
+    } catch (err) {
+        console.error('错误信息', err.message);
+    }
+
+
+    //console.log('点击事件触发', currentSessionId)
 }
 
-async function sendMessage() {
+/* async function sendMessage() {
     const input = document.getElementById('message-input');
     const content = input.value.trim();
 
@@ -236,6 +258,162 @@ async function sendMessage() {
     if (!fullContent) {
         assistantContentDiv.textContent = '（没有收到回复）';
     }
+} */
+
+
+/**
+ * 发送消息，SSE POST 流式对话（工业加固版）
+ * @param {AbortSignal} [outerSignal] 外部传入取消信号（可选，例如切换会话时取消）
+ * @returns {Promise<void>}
+ */
+async function sendMessage(outerSignal) {
+    // ========== 提交锁：防止连续点击重复发送 ==========
+    if (sendMessage.isGenerating) {
+        console.warn('正在生成回复，忽略本次提交');
+        return;
+    }
+
+    const input = document.getElementById('message-input');
+    const content = input.value.trim();
+
+    if (!content || !currentSessionId) {
+        alert('请先选择会话');
+        return;
+    }
+
+    sendMessage.isGenerating = true;
+    // 本地 controller：用于超时取消；同时和外部信号联动
+    const innerController = new AbortController();
+    const timeoutTimer = setTimeout(() => {
+        innerController.abort('请求超时 60s');
+    }, 60_000);
+
+    // 合并外部取消信号 + 内部超时信号
+    const abortSignal = AbortSignal.any([
+        innerController.signal,
+        ...(outerSignal ? [outerSignal] : [])
+    ]);
+
+    let assistantContentDiv = null;
+    let reader = null;
+
+    try {
+        // 渲染用户消息、清空输入框、创建AI占位
+        appendMessage('user', content);
+        input.value = '';
+        assistantContentDiv = appendMessage('assistant', 'thinking~~~~');
+
+        // SSE POST 请求
+        const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${getToken()}`
+            },
+            body: JSON.stringify({
+                sessionId: currentSessionId,
+                content: content,
+            }),
+            signal: abortSignal
+        });
+
+        // HTTP 状态校验
+        if (!response.ok) {
+            assistantContentDiv.textContent = `发送失败（HTTP ${response.status}）`;
+            return;
+        }
+
+        // SSE Content-Type 校验
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!contentType.includes('text/event-stream')) {
+            const raw = await response.text();
+            console.error('响应不是 SSE：', contentType, raw.slice(0, 200));
+            assistantContentDiv.textContent = `响应格式错误：${contentType}`;
+            return;
+        }
+
+        // 流式读取
+        reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8', { fatal: false });
+        let buffer = '';
+        let fullContent = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+
+            // 按 SSE 空行分割事件
+            const events = buffer.split(/\r?\n\r?\n/);
+            buffer = events.pop() ?? '';
+
+            for (const event of events) {
+                const lines = event.split(/\r?\n/);
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const dataStr = line.slice(6).trim();
+                    if (dataStr === '[DONE]') continue;
+
+                    try {
+                        const data = JSON.parse(dataStr);
+                        if (typeof data.content === 'string') {
+                            fullContent += data.content;
+                            assistantContentDiv.textContent = fullContent;
+                            scrollToBottom();
+                        }
+                    } catch (parseErr) {
+                        console.error('SSE JSON解析失败：', parseErr.message, dataStr);
+                    }
+                }
+            }
+        }
+
+        if (!fullContent) {
+            assistantContentDiv.textContent = '（没有收到回复）';
+        }
+
+    } catch (err) {
+        console.error('流式请求异常：', err);
+        if (!assistantContentDiv) return;
+
+        if (err.name === 'AbortError') {
+            assistantContentDiv.textContent = '（已停止生成）';
+        } else {
+            assistantContentDiv.textContent = '网络异常，请重试';
+        }
+    } finally {
+        // 清理资源：定时器、reader、释放锁
+        clearTimeout(timeoutTimer);
+        if (reader) {
+            try {
+                reader.releaseLock();
+            } catch (e) { /* releaseLock 失败静默 */ }
+        }
+        sendMessage.isGenerating = false;
+        document.getElementById('btn-stop').disabled = true;
+    }
+}
+
+// 在函数对象上挂载锁变量（静态标记）
+sendMessage.isGenerating = false;
+
+let currentStreamAbortController = null
+function startSend() {
+    if (currentStreamAbortController) {
+        currentStreamAbortController.abort('终止上一条信息!');
+    }
+    currentStreamAbortController = new AbortController();
+    document.getElementById('btn-stop').disabled = false;
+    sendMessage(currentStreamAbortController.signal);
+}
+
+function stopGenerat() {
+    if (currentStreamAbortController) {
+        currentStreamAbortController.abort('用户手动停止');
+        currentStreamAbortController = null;
+    }
+
 }
 
 function scrollToBottom() {
@@ -244,7 +422,7 @@ function scrollToBottom() {
 }
 
 
-function appendMessage(role, content) {
+function appendMessage(role, content, createdAt) {
     //获取聊天容器
     const chatMessages = document.getElementById('chat-messages');
     //动态添加消息容器
@@ -253,7 +431,8 @@ function appendMessage(role, content) {
     //创建消息内容
     const contentDiv = el('div', 'message-content', content);
     //创建时间戳
-    const timeDiv = el('div', 'message-time', new Date().toLocaleDateString());
+    const time = createdAt ? new Date(createdAt) : new Date();
+    const timeDiv = el('div', 'message-time', time.toLocaleDateString());
     //组装容器并添加到页面
     msgDiv.append(contentDiv, timeDiv)
     chatMessages.append(msgDiv)
@@ -262,10 +441,33 @@ function appendMessage(role, content) {
     return contentDiv;
 }
 
+/**
+ * 加载会话历史消息
+ * @param {string} sessionId - 会话ID
+ * @returns {Promise<Array<Record<string, any>>>} 消息数组，无消息返回空数组
+ * @throws {Error} 接口请求异常（404/401/500等）
+ */
+async function loadMessages(sessionId) {
+    const response = await fetch(`/api/sessions/${sessionId}/messages`, {
+        method: 'GET',
+        headers: {
+            "Authorization": `Bearer ${getToken()}`,
+        }
+    });
+    if (!response.ok) {
+        console.error('加载历史消息失败!', response.status);
+        throw new Error(`加载消息失败，状态码：${response.status}`);
+    }
+    const messages = await response.json();
+    return messages;
+}
+
+
 
 // === 初始化：有 token 直接进入聊天页 ===
 if (getToken()) {
     showChat();
+    loadSessions();
 } else {
     showLogin();
 }

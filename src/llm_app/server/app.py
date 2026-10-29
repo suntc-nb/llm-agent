@@ -368,3 +368,26 @@ def chat_stream(
             'X-Accel-Buffering': 'no',
         },
     )
+
+
+@app.get('/api/sessions/{session_id}/messages')
+def list_messages(
+    session_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict, Depends(get_current_user)],
+) -> list[schemas.ChatMessageResponse]:
+    stmt = select(
+        exists().where(
+            models.ChatSession.session_id == session_id,
+            models.ChatSession.user_id == current_user['user_id'],
+        )
+    )
+    if not db.scalar(stmt):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='会话不存在或无权访问')
+
+    stmt = (
+        select(models.ChatMessage)
+        .where(models.ChatMessage.session_id == session_id)
+        .order_by(models.ChatMessage.created_at)
+    )
+    return [schemas.ChatMessageResponse.model_validate(m) for m in db.scalars(stmt).all()]

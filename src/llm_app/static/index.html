@@ -47,7 +47,8 @@
             <div id="chat-messages"></div>
             <div class="chat-input">
                 <input type="text" id="message-input" placeholder="输入消息...">
-                <button onclick="sendMessage()">发送</button>
+                <button id="btn-send" onclick="startSend()">发送</button>
+                <button id="btn-stop" onclick="stopGenerat()" disabled>stop</button>
             </div>
         </div>
     </div>
