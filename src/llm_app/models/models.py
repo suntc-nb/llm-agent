@@ -44,7 +44,11 @@ class ChatMessage(Base):
         index=True, nullable=False, unique=True, default=lambda: str(uuid.uuid4())
     )
     session_id: Mapped[str] = mapped_column(
-        ForeignKey('chat_sessions.session_id', name='fk_chat_messages_session_id'),
+        ForeignKey(
+            'chat_sessions.session_id',
+            name='fk_chat_messages_session_id',
+            ondelete='CASCADE',
+        ),
         index=True,
         nullable=False,
     )

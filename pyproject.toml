@@ -40,6 +40,7 @@ dependencies = [
     "transformers>=5.17.0",
     "uvicorn>=0.54.0",
     "zai-sdk>=0.2.3",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]

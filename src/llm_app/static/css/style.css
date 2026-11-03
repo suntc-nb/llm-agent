@@ -121,6 +121,7 @@ body {
     cursor: pointer;
     border-bottom: 1px solid #3a3a3a;
     transition: background-color 0.2s;
+    position: relative;
 }
 
 .session-item:hover {
@@ -139,6 +140,65 @@ body {
 .session-time {
     font-size: 12px;
     color: #999;
+}
+
+/* 父容器，比如你的 session-item */
+.session-item:hover .session-delete {
+    opacity: 1;
+    /* 悬停才显示 */
+}
+
+.session-delete {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: #999;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    /* 默认隐藏 */
+    transition: opacity 0.2s, color 0.2s;
+
+}
+
+.session-delete:hover {
+    color: #ff4d4f;
+    /* 悬停变红，提示危险操作 */
+}
+
+.sidebar-footer {
+    padding: 15px 20px;
+    background-color: #1f1f1f;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid #3a3a3a;
+}
+
+.sidebar-footer span {
+    font-size: 13px;
+    color: #999;
+}
+
+.sidebar-footer button {
+    padding: 6px 12px;
+    background-color: transparent;
+    color: #999;
+    border: 1px solid #555;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.sidebar-footer button:hover {
+    color: #fff;
+    border-color: #888;
 }
 
 /* === 右侧聊天区域 === */
@@ -188,6 +248,12 @@ body {
     background-color: #ffffff;
     color: #333;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.message-content.message-error {
+    background-color: #fff1f0;
+    color: #cf1322;
+    border: 1px solid #ffa39e;
 }
 
 .message-time {

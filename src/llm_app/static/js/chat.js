@@ -3,7 +3,7 @@ const getUserId = () => localStorage.getItem('userId') ?? ''
 const getUsername = () => localStorage.getItem('username') ?? ''
 
 let currentSessionId = ''
-
+let sessionLoadSeq = 0;
 // === 页面切换 ===
 function showLogin(
 ) {
@@ -24,6 +24,24 @@ function showChat(
     document.getElementById('login-page').style.display = 'none';
     document.getElementById('register-page').style.display = 'none';
     document.getElementById('chat-page').style.display = 'flex';
+    document.getElementById('current-username').textContent = getUsername();
+}
+
+async function apiFetch(url, options = {}) {
+    const headers = {
+        ...options.headers,
+        'Authorization': `Bearer ${getToken()}`,
+    };
+    const response = await fetch(url, {
+        ...options,
+        headers
+    })
+    if (response.status === 401) {
+        localStorage.clear();
+        showLogin();
+        throw new Error('登录已过期,请重新登录!');
+    }
+    return response
 }
 
 async function login() {
@@ -53,6 +71,25 @@ async function login() {
     await loadSessions();
 }
 
+function logout() {
+    //中断正在进行的sse输出
+    if (currentStreamAbortController) {
+        currentStreamAbortController.abort('退出登录!');
+        currentStreamAbortController = null;
+    }
+    //清理本地状态
+    localStorage.clear();
+    currentSessionId = '';
+
+    //清理页面残留
+    document.getElementById('chat-messages').replaceChildren();
+    document.getElementById('session-list').replaceChildren();
+
+    //返回登录页
+    showLogin();
+}
+
+
 async function register() {
     // @ts-ignore
     const username = document.getElementById('register-username').value;
@@ -78,11 +115,11 @@ async function createSession() {
     const sessionName = prompt('请输入会话名称', '新会话');
     if (!sessionName) return
 
-    const response = await fetch('/api/session', {
+    const response = await apiFetch('/api/session', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${getToken()}`,
+            //'Authorization': `Bearer ${getToken()}`,
         },
         body: JSON.stringify({ sessionName })
     })
@@ -115,9 +152,9 @@ function el(tag, className, text) {
 }
 
 async function loadSessions() {
-    const response = await fetch('/api/sessions', {
+    const response = await apiFetch('/api/sessions', {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${getToken()}` }
+        //headers: { 'Authorization': `Bearer ${getToken()}` }
     });
 
     const sessions = await response.json();
@@ -137,6 +174,15 @@ async function loadSessions() {
             el('div', 'session-name', session.sessionName),
             el('div', 'session-time', new Date(session.createdAt).toLocaleString())
         );
+        const delBtn = el('button', 'session-delete', 'X');
+        delBtn.type = 'button';
+        delBtn.title = '删除回话';
+        delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteSession(session.sessionId);
+            //console.log('测试点击!')
+        });
+        div.append(delBtn);
         div.addEventListener('click', () => {
             selectSession(session.sessionId, session.sessionName, div);
         });
@@ -144,8 +190,26 @@ async function loadSessions() {
     });
 }
 
-async function selectSession(sessionId, sessionName, element) {
+async function deleteSession(sessionId) {
+    if (!confirm('确定要删除此会话?')) return;
+    const response = await apiFetch(`/api/sessions/${sessionId}`, {
+        method: 'DELETE',
+        //headers: {'Authorization': `Bearer ${getToken()}`}
+    });
+    if (!response.ok) {
+        alert('删除失败!');
+        console.debug('错误信息', response.status)
+        return;
+    }
+    if (currentSessionId === sessionId) {
+        currentSessionId = '';
+        document.getElementById('chat-messages').replaceChildren()
+    }
+    loadSessions();
+}
 
+async function selectSession(sessionId, sessionName, element) {
+    const seq = ++sessionLoadSeq; // ① 先自增，拿到本次请求专属序号
     // 在 selectSession 开头加
     if (currentStreamAbortController) {
         currentStreamAbortController.abort('切换会话');
@@ -164,6 +228,7 @@ async function selectSession(sessionId, sessionName, element) {
     //加载历史消息,并渲染
     try {
         const messages = await loadMessages(sessionId);
+        if (seq !== sessionLoadSeq) return; // 已被更新的点击取代，丢弃
         if (!messages) {
             return;
         }
@@ -337,6 +402,7 @@ async function sendMessage(outerSignal) {
         const decoder = new TextDecoder('utf-8', { fatal: false });
         let buffer = '';
         let fullContent = '';
+        let errorMessage = '';
 
         while (true) {
             const { done, value } = await reader.read();
@@ -357,6 +423,10 @@ async function sendMessage(outerSignal) {
 
                     try {
                         const data = JSON.parse(dataStr);
+                        if (typeof data.error === 'string') {
+                            errorMessage = data.error;
+                            continue;
+                        }
                         if (typeof data.content === 'string') {
                             fullContent += data.content;
                             assistantContentDiv.textContent = fullContent;
@@ -369,7 +439,10 @@ async function sendMessage(outerSignal) {
             }
         }
 
-        if (!fullContent) {
+        if (errorMessage) {
+            assistantContentDiv.textContent = errorMessage;
+            assistantContentDiv.classList.add('message-error');
+        } else if (!fullContent) {
             assistantContentDiv.textContent = '（没有收到回复）';
         }
 
@@ -463,6 +536,17 @@ async function loadMessages(sessionId) {
 }
 
 
+
+// === Enter 发送消息 ===
+/** @type {HTMLInputElement} */
+const messageInput = /** @type {HTMLInputElement} */ (document.getElementById('message-input'));
+messageInput.addEventListener('keydown', (event) => {
+    // 中文输入法组合输入期间，Enter 用于确认候选词，不能触发发送
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    if (!messageInput.value.trim()) return;
+    startSend();
+});
 
 // === 初始化：有 token 直接进入聊天页 ===
 if (getToken()) {
