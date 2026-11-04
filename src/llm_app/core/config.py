@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,7 +28,11 @@ class AppSettings(BaseSettings):
             为 DEBUG 时开启 SQLAlchemy 的 SQL 回显（echo）。
     """
 
-    log_level: str = 'INFO'
+    log_level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = 'INFO'
+    log_format: Literal['text', 'json'] = 'text'
+    log_file: str = ''
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backup_count: int = 5
     model_config = SettingsConfigDict(
         env_file=root_dir / '.env',
         extra='ignore',

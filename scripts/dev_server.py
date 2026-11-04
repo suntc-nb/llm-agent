@@ -14,18 +14,22 @@ from pathlib import Path
 
 import uvicorn
 
+from llm_app.core.logging import setup_logging
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / 'src'
 
 
 def main() -> None:
     """启动带热重载的 Uvicorn 开发服务器。"""
+    setup_logging()
     uvicorn.run(
         'llm_app.server.app:app',
         host=os.getenv('DEV_HOST', '0.0.0.0'),
         port=int(os.getenv('DEV_PORT', '8000')),
         reload=True,
         reload_dirs=[str(SRC_DIR)],
+        log_config=None,
     )
 
 

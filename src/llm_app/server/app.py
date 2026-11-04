@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from llm_app.core.config import get_settings
 from llm_app.core.database import get_db
+from llm_app.core.logging import setup_logging
 from llm_app.models import models
 from llm_app.schemas import schemas
 from llm_app.server.auth import create_access_token, encode_pwd, get_current_user, verify_pwd
@@ -48,6 +49,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Yields:
         None: 应用运行期间的控制权。
     """
+    # 日志入口
+    setup_logging()
     # 超时按用途拆开：建连要快速失败，流式读取要允许模型长时间思考。
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
