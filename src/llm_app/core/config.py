@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-root_dir = Path(__file__).resolve().parents[3]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 
 
 class DBSettings(BaseSettings):
@@ -13,7 +13,7 @@ class DBSettings(BaseSettings):
 
     database_url: str = ''
     model_config = SettingsConfigDict(
-        env_file=root_dir / '.env',
+        env_file=ROOT_DIR / '.env',
         extra='ignore',
         env_file_encoding='utf-8',
         env_prefix='SQLITE_',  # 环境变量统一前缀，如 APP_API_KEY
@@ -34,7 +34,7 @@ class AppSettings(BaseSettings):
     log_max_bytes: int = 10 * 1024 * 1024
     log_backup_count: int = 5
     model_config = SettingsConfigDict(
-        env_file=root_dir / '.env',
+        env_file=ROOT_DIR / '.env',
         extra='ignore',
         env_file_encoding='utf-8',
     )
@@ -46,7 +46,7 @@ class LLMSettings(BaseSettings):
     model_name: str
     model_config = SettingsConfigDict(
         env_prefix='BIGMODEL_',
-        env_file=root_dir / '.env',
+        env_file=ROOT_DIR / '.env',
         env_file_encoding='utf-8',
         extra='ignore',
     )
