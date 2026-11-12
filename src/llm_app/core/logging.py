@@ -42,7 +42,8 @@ class JsonFormatter(logging.Formatter):
 
 class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        record.request_id = get_request_id()
+        if not hasattr(record, 'request_id'):
+            record.request_id = get_request_id()
         return True
 
 
@@ -109,13 +110,13 @@ def setup_logging(settings: AppSettings | None = None) -> None:
         'loggers': {
             'uvicorn': {'handlers': [], 'level': settings.log_level, 'propagate': True},
             'uvicorn.error': {'handlers': [], 'level': settings.log_level, 'propagate': True},
-            'uvicorn.access': {'handlers': [], 'level': settings.log_level, 'propagate': True},
+            'uvicorn.access': {'handlers': [], 'level': 'WARNING', 'propagate': True},
             'httpx': {'handlers': [], 'level': 'WARNING', 'propagate': True},
         },
     }
     logging.config.dictConfig(config=config)
     setattr(root, _CONFIGURED_FLAG, True)
-    token = set_request_id('test001')
+    """ token = set_request_id('test001')
     try:
         logger.info(
             '日志配置生效: level=%s format=%s file=%s',
@@ -125,4 +126,4 @@ def setup_logging(settings: AppSettings | None = None) -> None:
             # extra={'request_id': get_request_id()},
         )
     finally:
-        reset_request_id(token)
+        reset_request_id(token) """

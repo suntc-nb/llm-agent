@@ -15,6 +15,7 @@ import httpx
 import requests
 from cachetools import TTLCache
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,14 +23,24 @@ from pydantic import BaseModel
 from sqlalchemy import exists, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from llm_app.core.config import get_settings
 from llm_app.core.database import get_db
+from llm_app.core.exceptions import AppError, ExternalServiceError, NotFoundError
 from llm_app.core.logging import setup_logging
 from llm_app.models import models
 from llm_app.schemas import schemas
 from llm_app.server.auth import create_access_token, encode_pwd, get_current_user, verify_pwd
 from llm_app.server.dependencies import get_http_client
+from llm_app.server.exception_handlers import (
+    app_error_handler,
+    http_exception_handler,
+    sqlalchemy_exception_handler,
+    unhandled_exception_handler,
+    validation_exception_handler,
+)
+from llm_app.server.middleware import RequestContextMiddleware
 from llm_app.utils.common_class import CommonLlmApi
 from llm_app.utils.common_function import TokenSlidingChatMemory, warm_up_tokenizer
 
@@ -73,6 +84,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(title='LLM Chat Server', lifespan=lifespan, docs_url=None)
+# 注册中间件,处理logger
+app.add_middleware(RequestContextMiddleware)
+# 注册异常处理handlers
+app.add_exception_handler(AppError, app_error_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(SQLAlchemyError, sqlalchemy_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
+
+# 挂载静态页面
 static_dir = Path(__file__).parent.parent / 'static'
 app.mount('/static', StaticFiles(directory=str(static_dir), html=True), name='static')
 
@@ -133,14 +154,19 @@ def health_check() -> dict:
     }
 
 
-@app.get('/api/test')
-def test() -> dict:
-    """测试用户token保存情况
+@app.get('/api/_test/apperror')
+def test():
+    raise NotFoundError('测试资源不存在')
 
-    Returns:
-        dict: user_id关联的token
-    """
-    return user_map_id
+
+@app.get('/api/_test/unhandled')
+def _test_unhandled():
+    raise RuntimeError('测试未处理异常')
+
+
+@app.get('/api/_test/db')
+def _test_db():
+    raise SQLAlchemyError('测试数据库异常')
 
 
 @app.get('/api/debug/users')

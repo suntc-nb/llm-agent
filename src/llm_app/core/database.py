@@ -1,8 +1,10 @@
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from llm_app.core.config import AppSettings, DBSettings
 
@@ -41,7 +43,7 @@ class Base(DeclarativeBase):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def get_db():
+def get_db() -> Generator[Session, None, None]:
     """
     FastAPI 依赖注入函数：为每个请求创建独立的数据库会话。
 
@@ -52,5 +54,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except SQLAlchemyError:
+        db.rollback()
+        raise
     finally:
         db.close()
