@@ -54,8 +54,11 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
         '%s',
         str(app_exc),
         extra={
+            'reqest_id': request_id,
             'error_code': app_exc.code,
+            'http_status': app_exc.http_status,
             'details': app_exc.details,
+            'interanl_details': app_exc.internal_details,
         },
         exc_info=app_exc if app_exc.log_level >= logging.ERROR else False,
     )
@@ -65,6 +68,7 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
         message=app_exc.message,
         request_id=request_id,
         details=app_exc.details,
+        headers=app_exc.headers,
     )
 
 
@@ -79,7 +83,10 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
         }
         for err in app_exc.errors()
     ]
-    logger.warning('请求参数校验失败!', extra={'details': safe_error})
+    logger.warning(
+        '请求参数校验失败!',
+        extra={'request_id': request_id, 'error_code': 'VALIDATION_ERROR', 'details': safe_error},
+    )
     return _error_response(
         status_code=422,
         code='VALIDATION_ERROR',
@@ -120,6 +127,8 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
         app_exc.status_code,
         message,
         extra={
+            'request_id': request_id,
+            'error_code': f'HTTP_{app_exc.status_code}',
             'http_status': app_exc.status_code,
             'details': details,
         },

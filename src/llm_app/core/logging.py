@@ -2,9 +2,10 @@ import json
 import logging
 import logging.config
 from pathlib import Path
+from typing import Any
 
 from llm_app.core.config import ROOT_DIR, AppSettings
-from llm_app.core.context import get_request_id, reset_request_id, set_request_id
+from llm_app.core.context import get_request_id
 
 logger = logging.getLogger(__name__)
 _CONFIGURED_FLAG = '_llm_app_logging_configured'
@@ -63,7 +64,7 @@ def setup_logging(settings: AppSettings | None = None) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)  # 先建目录
 
     # 2. 先组装 handlers，console 永远有
-    handlers: dict[str, dict] = {
+    handlers: dict[str, Any] = {
         'console': {
             'class': 'logging.StreamHandler',
             'level': settings.log_level,
@@ -89,7 +90,7 @@ def setup_logging(settings: AppSettings | None = None) -> None:
 
     # 4. root 的 handler 列表跟着 handlers 走
     handler_list = list(handlers)
-    config = {
+    config: dict[str, Any] = {
         'version': 1,
         'disable_existing_loggers': False,
         'formatters': {

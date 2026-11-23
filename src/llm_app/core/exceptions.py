@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -9,10 +10,17 @@ class AppError(Exception):
     default_message: str = '服务器内部错误'
 
     def __init__(
-        self, message: str | None = None, *, details: dict[str, Any] | None = None
+        self,
+        message: str | None = None,
+        *,
+        details: dict[str, Any] | None = None,
+        internal_details: dict[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         self.message = message or self.default_message
-        self.details = details
+        self.details = details  # 可公开给客户端
+        self.internal_details = internal_details  # 只进日志,绝不返回
+        self.headers = headers
         super().__init__(self.message)
 
     def to_dict(self) -> dict[str, Any]:
@@ -66,3 +74,32 @@ class ExternalServiceError(AppError):
     log_level = logging.ERROR
     default_message = '外部服务错误'
 
+
+class SessionNotFoundError(NotFoundError):
+    code = 'SESSION_NOT_FOUND'
+    default_message = '会话不存在'
+
+
+class UserAlreadyExistsError(ConflictError):
+    code = 'USER_ALREADY_EXISTS'
+    default_message = '用户名已存在'
+
+
+class InvalidCredentialsError(AuthenticationError):
+    code = 'INVALID_CREDENTIALS'
+    default_message = '用户名或密码错误'
+
+
+class MissingCredentialsError(AuthenticationError):
+    code = 'MISSING_CREDENTIALS'
+    default_message = '缺少认证凭证'
+
+
+class InvalidTokenError(AuthenticationError):
+    code = 'INVALID_TOKEN'
+    default_message = '无效的 Token'
+
+
+class TokenExpiredError(AuthenticationError):
+    code = 'TOKEN_EXPIRED'
+    default_message = 'Token 已过期，请重新登录'

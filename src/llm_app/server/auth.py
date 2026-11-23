@@ -4,10 +4,12 @@ from typing import Annotated
 
 import jwt
 from dotenv import find_dotenv, load_dotenv
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pwdlib import PasswordHash
 from pydantic import BaseModel, Field
+
+from llm_app.core.exceptions import InvalidTokenError, MissingCredentialsError, TokenExpiredError
 
 _ = load_dotenv(find_dotenv())
 
@@ -73,35 +75,28 @@ def create_access_token(userinfo: dict, expire_delta: timedelta | None = None) -
     )
 
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
+
+WWW_AUTH_HEADERS = {'WWW-Authenticate': 'Bearer'}
 
 
 def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
 ) -> dict:
+    if credentials is None:
+        raise MissingCredentialsError(headers=WWW_AUTH_HEADERS)
     try:
         payload = jwt.decode(
             credentials.credentials,
             jwt_config_info.secert_key,
             algorithms=[jwt_config_info.algorithm],
         )
-        user_id: str = payload.get('sub')  # pyright: ignore[reportAssignmentType]
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail='无效的 token',
-                headers={'WWW-Authenticate': 'Bearer'},
-            )
-        return {'user_id': user_id}
+
     except jwt.ExpiredSignatureError as err:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='Token已过期,请重新登录',
-            headers={'WWW-Authenticate': 'Bearer'},
-        ) from err
+        raise TokenExpiredError(headers=WWW_AUTH_HEADERS) from err
     except jwt.InvalidTokenError as err:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='无效的 Token',
-            headers={'WWW-Authenticate': 'Bearer'},
-        ) from err
+        raise InvalidTokenError(headers=WWW_AUTH_HEADERS) from err
+    user_id: str = payload.get('sub')  # pyright: ignore[reportAssignmentType]
+    if user_id is None:
+        raise InvalidTokenError('Token 缺少用户标识', headers=WWW_AUTH_HEADERS)
+    return {'user_id': user_id}

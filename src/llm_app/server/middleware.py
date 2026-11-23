@@ -2,8 +2,6 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
-from typing import Any
 
 from starlette.datastructures import MutableHeaders
 
@@ -12,7 +10,7 @@ from llm_app.core.context import reset_request_id, set_request_id
 logger = logging.getLogger(__name__)
 
 _HEADER = b'x-request-id'
-_VALID_ID = re.compile(r'^[A-Za-z0-9._-]{1,64}$')
+_VALID_ID = re.compile(r'^[A-Za-z0-9._-]{8,64}$')
 
 
 class RequestContextMiddleware:

@@ -4,30 +4,35 @@ import asyncio
 import json
 import logging
 import threading
-import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import httpx
-import requests
 from cachetools import TTLCache
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import exists, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from llm_app.core.config import get_settings
+from llm_app.core.context import get_request_id
 from llm_app.core.database import get_db
-from llm_app.core.exceptions import AppError, ExternalServiceError, NotFoundError
+from llm_app.core.exceptions import (
+    AppError,
+    ExternalServiceError,
+    InvalidCredentialsError,
+    SessionNotFoundError,
+    UserAlreadyExistsError,
+)
 from llm_app.core.logging import setup_logging
 from llm_app.models import models
 from llm_app.schemas import schemas
@@ -43,6 +48,7 @@ from llm_app.server.exception_handlers import (
 from llm_app.server.middleware import RequestContextMiddleware
 from llm_app.utils.common_class import CommonLlmApi
 from llm_app.utils.common_function import TokenSlidingChatMemory, warm_up_tokenizer
+from llm_app.utils.sse import encode_event, extract_content, parse_data_line
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +141,6 @@ user_map_id: dict[str, LoginInfo] = {}
 
 
 # 常量定义
-AUTH_FAILED_MSG_LOGIN = '用户名或密码错误'
-AUTH_FAILED_MSG_REGISTER = '用户名已存在'
-SESSION_NOT_EXISTS = '会话不存在'
 
 
 @app.get('/api/health')
@@ -154,21 +157,6 @@ def health_check() -> dict:
     }
 
 
-@app.get('/api/_test/apperror')
-def test():
-    raise NotFoundError('测试资源不存在')
-
-
-@app.get('/api/_test/unhandled')
-def _test_unhandled():
-    raise RuntimeError('测试未处理异常')
-
-
-@app.get('/api/_test/db')
-def _test_db():
-    raise SQLAlchemyError('测试数据库异常')
-
-
 @app.get('/api/debug/users')
 def debug_users(current_user: Annotated[dict, Depends(get_current_user)]):
     """测试token有效性"""
@@ -180,11 +168,17 @@ def debug_users(current_user: Annotated[dict, Depends(get_current_user)]):
 def register(userinfo: schemas.UserInfo, db: Annotated[Session, Depends(get_db)]):
     stmt = select(exists().where(models.UserInfo.user_name == userinfo.username))
     if db.scalar(stmt):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AUTH_FAILED_MSG_REGISTER)
+        raise UserAlreadyExistsError()
     hash_pwd = encode_pwd(userinfo.password)
     newuser = models.UserInfo(user_name=userinfo.username, user_hashed_pwd=hash_pwd)
     db.add(newuser)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if 'user_name' in str(exc.orig):
+            raise UserAlreadyExistsError() from exc
+        raise
     db.refresh(newuser)
     return {'message': '用户注册成功'}
 
@@ -204,7 +198,7 @@ def login(
     stmt = select(models.UserInfo).where(models.UserInfo.user_name == userinfo.username)
     res_user = db.scalar(stmt)
     if not res_user or not verify_pwd(userinfo.password, hashed_pwd=res_user.user_hashed_pwd):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=AUTH_FAILED_MSG_LOGIN)
+        raise InvalidCredentialsError(headers={'WWW-Authenticate': 'Bearer'})
 
     access_token = create_access_token(userinfo={'sub': res_user.user_id})
     # user.access_token = access_token
@@ -269,19 +263,14 @@ def delete_session(
     )
     session = db.scalar(stmt)
     if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='会话不存在')
+        raise SessionNotFoundError()
     # commit 后实例会过期，删除前先取出名称，避免 ObjectDeletedError
     session_name = session.session_name
-    try:
-        # chat_messages 外键已配置 ON DELETE CASCADE，子表消息由数据库级联删除
-        db.delete(session)
-        db.commit()
-    except SQLAlchemyError:
-        db.rollback()
-        logger.exception('删除会话失败, session_id=%s', session_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='删除会话失败'
-        ) from None
+
+    # chat_messages 外键已配置 ON DELETE CASCADE，子表消息由数据库级联删除
+    db.delete(session)
+    db.commit()
+
     session_memory.pop(session_id, None)
     return {
         'code': 0,
@@ -319,40 +308,37 @@ def _load_memory(session_id: str, db: Session) -> TokenSlidingChatMemory:
     return memory
 
 
-def _parse_sse_data(line: str) -> str | None:
-    """解析一行 SSE，返回 data 字段内容；非 data 行返回 None。"""
-    # text = line.decode('utf-8')
-    if not line.startswith('data: '):
-        return None
-    return line.removeprefix('data: ')
-
-
-def _extract_content(data_str: str) -> str:
-    """从 OpenAI 兼容的流式响应中提取增量文本。
-
-    Raises:
-        json.JSONDecodeError: 当该行不是合法 JSON 时。
-    """
-    data = json.loads(data_str)
-    delta = data.get('choices', [{}])[0].get('delta', {})
-    return delta.get('content', '')
-
-
 def _save_assistant_message(
-    db: Session, session_id: str, content: str, memory: TokenSlidingChatMemory
-) -> None:
+    db: Session,
+    session_id: str,
+    content: str,
+) -> bool:
     """持久化 assistant 消息并同步内存，失败时回滚且不中断流。"""
     try:
         db.add(models.ChatMessage(session_id=session_id, role='assistant', content=content))
         db.commit()
-        memory.add_message(role='assistant', content=content)
-    except SQLAlchemyError:
+        # memory.add_message(role='assistant', content=content)
+        return True
+    except SQLAlchemyError as exc:
         db.rollback()
-        logger.exception('保存 assistant 消息失败, session_id=%s', session_id)
+        logger.error(
+            '保存 assistant 消息失败, session_id=%s',
+            session_id,
+            exc_info=exc,
+            extra={
+                'error_code': 'ASSISTANT_MESSAGE_SAVE_FAILED',
+                'exception_type': type(exc).__name__,
+                'session_id': session_id,
+            },
+        )
+        return False
 
 
 async def chat_stream_generator(
-    client: httpx.AsyncClient, session_id: str, user_content: str, db: Session, current_user: dict
+    client: httpx.AsyncClient,
+    session_id: str,
+    db: Session,
+    memory: TokenSlidingChatMemory,
 ) -> AsyncGenerator[str, None]:
     """流式返回 LLM 回复，并在结束时持久化。
 
@@ -365,46 +351,78 @@ async def chat_stream_generator(
     Yields:
         str: SSE 格式的事件数据。
     """
-    db.add(models.ChatMessage(session_id=session_id, role='user', content=user_content))
-    db.commit()
+    # 转移到sse外执行由全局处理处理异常
+    # db.add(models.ChatMessage(session_id=session_id, role='user', content=user_content))
+    # db.commit()
 
-    memory = _load_memory(session_id, db)
-    memory.add_message(role='user', content=user_content)
+    # memory = _load_memory(session_id, db)
+    # memory.add_message(role='user', content=user_content)
 
     llm = CommonLlmApi(get_settings(), temperature=0.7, top_p=0.9)
-    try:
-        response = llm.astream_chat(client, memory.get_messages())
-    except requests.RequestException:
-        logger.exception('LLM 调用失败, session_id=%s', session_id)
-        yield f'data: {json.dumps({"error": "LLM 服务暂时不可用，请稍后重试"})}\n\n'
-        yield f'data: {json.dumps({"done": True})}\n\n'
-        return
 
     assistant_content = ''
     try:
-        async for line in response:
-            data_str = _parse_sse_data(line) if line else None
+        async for line in llm.astream_chat(client, memory.get_messages()):
+            data_str = parse_data_line(line) if line else None
             if data_str is None:
                 continue
             if data_str == '[DONE]':
                 break
             try:
-                content_chunk = _extract_content(data_str)
+                content_chunk = extract_content(data_str)
             except json.JSONDecodeError:
                 continue
             if content_chunk:
                 assistant_content += content_chunk
-                yield f'data: {json.dumps({"content": content_chunk})}\n\n'
-    except requests.RequestException:
-        logger.exception('LLM 流式读取中断, session_id=%s', session_id)
-        if not assistant_content:
-            yield f'data: {json.dumps({"error": "LLM 响应中断，请重试"})}\n\n'
+                yield encode_event('token', {'content': content_chunk})
+    except ExternalServiceError as exc:
+        request_id = get_request_id()
+        upstream_status = (exc.details or {}).get('upstream_status')
+        upstream_body = (exc.internal_details or {}).get('upstream_body', '')
+        logger.error(
+            'LLM 流式对话失败, session_id=%s, upstream_status=%s, upstream_body=%s',
+            session_id,
+            upstream_status,
+            upstream_body,
+            exc_info=exc,
+            extra={
+                'request_id': request_id,
+                'error_code': 'LLM_STREAM_FAILED',
+                'exception_type': type(exc).__name__,
+                'session_id': session_id,
+                'upstream_status': upstream_status,
+                'upstream_body': upstream_body,
+            },
+        )
+        # 响应头已经发出，全局处理器无法再改状态码，只能用 SSE 事件通知客户端
+
+        yield encode_event(
+            'app_err',
+            {
+                'error': 'LLM 服务暂时不可用，请稍后重试',
+                'request_id': request_id,
+            },
+        )
     finally:
         if assistant_content:
-            _save_assistant_message(db, session_id, assistant_content, memory)
+            save_status = await asyncio.to_thread(
+                _save_assistant_message, db, session_id, assistant_content
+            )
+            if save_status:
+                memory.add_message(role='assistant', content=assistant_content)
+            else:
+                logger.error(
+                    'assistant 消息保存失败!,session_id%s',
+                    session_id,
+                    extra={
+                        'request_id': get_request_id(),
+                        'error_code': 'ASSISTANT_MESSAGE_SAVE_FAILED',
+                        'session_id': session_id,
+                    },
+                )
         # response.close()
 
-    yield f'data: {json.dumps({"done": True})}\n\n'
+    yield encode_event('done', {})
 
 
 @app.post('/api/chat/stream')
@@ -420,14 +438,25 @@ def chat_stream(
     )
     session = db.scalar(stmt)
     if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=SESSION_NOT_EXISTS)
+        raise SessionNotFoundError()
+
+    # 阶段一,数据库操作走全局处理器,返回标准的JSON错误
+    db.add(
+        models.ChatMessage(
+            session_id=chat_request.session_id, role='user', content=chat_request.content
+        )
+    )
+    db.commit()
+
+    memory = _load_memory(chat_request.session_id, db)
+    memory.add_message(role='user', content=chat_request.content)
+    # 阶段二,只做流式响应
     return StreamingResponse(
         chat_stream_generator(
             client=client,
             session_id=chat_request.session_id,
-            user_content=chat_request.content,
             db=db,
-            current_user=current_user,
+            memory=memory,
         ),
         media_type='text/event-stream',
         headers={
@@ -451,7 +480,7 @@ def list_messages(
         )
     )
     if not db.scalar(stmt):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='会话不存在或无权访问')
+        raise SessionNotFoundError('会话不存在或无权访问')
 
     stmt = (
         select(models.ChatMessage)

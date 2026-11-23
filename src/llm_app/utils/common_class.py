@@ -1,4 +1,5 @@
-from collections.abc import AsyncGenerator, AsyncIterator
+import logging
+from collections.abc import AsyncIterator
 from typing import Literal
 
 import httpx
@@ -6,8 +7,10 @@ import requests
 from pydantic import BaseModel, Field
 
 from llm_app.core.config import LLMSettings
+from llm_app.core.exceptions import ExternalServiceError
 
 __all__ = ['CommonLlmApi', 'LLMConfig']
+logger = logging.getLogger(__name__)
 
 
 class LLMConfig(BaseModel):
@@ -44,7 +47,7 @@ class CommonLlmApi:
             'Content-Type': 'application/json',
         }
 
-    def _build_payload(self, messages: list[dict[str, str]], *,stream: bool = True) -> dict:
+    def _build_payload(self, messages: list[dict[str, str]], *, stream: bool = True) -> dict:
         return {
             'model': self.llmconfig.model_name,
             'messages': messages,
@@ -93,22 +96,30 @@ class CommonLlmApi:
                 url=self.llmconfig.zai_url,
                 headers=headers,
                 json=payload,
-                #timeout=self.timeout,
+                timeout=self.timeout,
             ) as resp:
                 if resp.status_code >= 400:
                     err_body = await resp.aread()
-                    err_msg = f'上游HTTP错误 {resp.status_code}: {err_body.decode("utf-8", errors="replace")}'
-                    raise RuntimeError(err_msg)
+                    body_text = err_body.decode('utf-8', errors='replace')
+                    safe_body = body_text.replace('\n', ' ').replace('\r', ' ')[:500]
+
+                    # 上游原始响应只进内部日志，不能放进异常 message 返回给客户端
+                    """ logger.error(
+                        '上游 LLM 返回 HTTP %s: %s',
+                        resp.status_code,
+                        body_text[:500],
+                    ) """
+                    raise ExternalServiceError(
+                        '上游服务返回错误',
+                        details={'upstream_status': resp.status_code},
+                        internal_details={'upstream_body': safe_body},
+                    )
 
                 async for chunk in resp.aiter_lines():
                     yield chunk
-        except httpx.TimeoutException as e:
-            raise RuntimeError('上游服务请求超时') from e
-
-        except httpx.TransportError as e:
-            raise RuntimeError('网络传输异常：DNS、连接拒绝、SSL、断网等') from e
-
-        except httpx.RequestError as e:
-            # RequestError 兜底所有传输类 httpx 异常
-            raise RuntimeError(f'上游请求异常：{e!s}') from e
-
+        except httpx.TimeoutException as exc:
+            raise ExternalServiceError('上游服务请求超时') from exc
+        except httpx.RequestError as exc:
+            # RequestError 是 TransportError/TimeoutException 的父类，
+            # 这一条兜住 DNS、连接拒绝、SSL、断流等所有传输异常
+            raise ExternalServiceError('上游服务连接失败') from exc

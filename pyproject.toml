@@ -45,6 +45,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.5",
     "watchfiles>=1.3.0",
 ]
 
@@ -86,10 +91,49 @@ ignore = [
   "RUF002",  # 忽略：文档字符串中包含歧义字符的警告
   "E501",    # 忽略：行长度超限警告（已由 line-length 配置控制格式化）
   "E402",    # 忽略：模块级 import 不在文件顶部的警告（Jupyter Notebook 常见）
-  "F401",    # 忽略：导入了但未使用的警告（某些导出模块需要保留导入）
 ]
 
 # [tool.ruff.lint.isort] 配置 import 排序的具体行为
 [tool.ruff.lint.isort]
 # split-on-trailing-comma：在 import 语句末尾有逗号时，强制每个导入独占一行
 split-on-trailing-comma = true
+
+[tool.pyright]
+# 分析范围：只查源码与测试，排除生成物
+include = ["src", "tests"]
+exclude = ["**/__pycache__", "**/build", "**/dist", "**/*.egg-info"]
+
+# 目标版本：与 requires-python / ruff target-version 对齐
+pythonVersion = "3.11"
+# 跨平台一致（Windows 开发 + Linux CI）；仅 Windows 项目可改为 "Windows"
+pythonPlatform = "All"
+
+# CLI 查找解释器；Pylance 由编辑器选择的解释器决定
+venvPath = "."
+venv = ".venv"
+
+# 基线模式，核心领域层额外收紧
+typeCheckingMode = "standard"
+strict = ["src/llm_app/core"]
+
+# 依赖解析相关严重级别：CI 必须暴露"依赖没装/源码缺失"的问题
+reportMissingImports = "error"
+reportMissingModuleSource = "warning"
+reportMissingTypeStubs = false  # 第三方库无 stub 时不刷屏
+
+# 与 ruff 分工：未使用导入/变量由 ruff 的 F401/F841 负责
+reportUnusedImport = "none"
+reportUnusedVariable = "none"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto" #开启自动异步
+asyncio_default_fixture_loop_scope = "function" #每个测试函数单独一个事件循环
+
+[tool.coverage.run]
+source = ["src/llm_app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# fail_under = 80  # 先注释，测试补齐后再启用

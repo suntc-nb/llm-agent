@@ -1,0 +1,7 @@
+# 默认策略：Git 自动识别文本文件，仓库与工作区统一使用 LF 行尾
+* text=auto eol=lf
+
+# Windows 专用脚本保留 CRLF，避免 cmd.exe / PowerShell 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -57,7 +57,7 @@ async function login() {
     });
     if (!response.ok) {
         const error = await response.json();
-        alert(error.detail || '登录失败!')
+        alert(error.message || '登录失败!')
         return
     }
 
@@ -103,7 +103,7 @@ async function register() {
     })
     if (!response.ok) {
         const error = await response.json();
-        alert(error.detail || '注册失败!');
+        alert(error.message || '注册失败!');
         return
     }
 
@@ -126,7 +126,7 @@ async function createSession() {
 
     const data = await response.json()
     if (!response.ok) {
-        alert(data.detail || '创建会话失败!')
+        alert(data.message || '创建会话失败!')
         return
     }
 
@@ -160,7 +160,7 @@ async function loadSessions() {
     const sessions = await response.json();
 
     if (!response.ok) {
-        alert(sessions.detail || '加载会话失败!');
+        alert(sessions.message || '加载会话失败!');
         return;
     }
 
@@ -360,6 +360,7 @@ async function sendMessage(outerSignal) {
     ]);
 
     let assistantContentDiv = null;
+    let assistantTextNode = null
     let reader = null;
 
     try {
@@ -403,7 +404,7 @@ async function sendMessage(outerSignal) {
         let buffer = '';
         let fullContent = '';
         let errorMessage = '';
-
+        //let hasFirstChunk = false;
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -414,29 +415,78 @@ async function sendMessage(outerSignal) {
             const events = buffer.split(/\r?\n\r?\n/);
             buffer = events.pop() ?? '';
 
-            for (const event of events) {
-                const lines = event.split(/\r?\n/);
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const dataStr = line.slice(6).trim();
-                    if (dataStr === '[DONE]') continue;
+            for (const rawEvent of events) {
+                let enventName = 'message';
+                const dataLines = [];
 
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (typeof data.error === 'string') {
-                            errorMessage = data.error;
-                            continue;
+                for (const line of rawEvent.split(/\r?\n/)) {
+                    if (line.startsWith('event:')) {
+                        enventName = line.slice(6).trim();
+                    }
+                    else if (line.startsWith('data:')) {
+                        dataLines.push(line.slice(5).trimStart());
+                    }
+                }
+
+                if (dataLines.length === 0)
+                    continue;
+                const dataStr = dataLines.join('\n');
+                if (dataStr === '[DONE]')
+                    continue;
+
+                let data;
+                try {
+                    data = JSON.parse(dataStr)
+                } catch (parseErr) {
+                    console.error('SSE JSON解析失败:', parseErr.message, dataStr);
+                    continue;
+                }
+
+                if (enventName === 'token') {
+                    if (typeof data.content === 'string' && data.content !== '') {
+                        //首块：清掉 "thinking~~~~" 占位，创建一个持久的文本节点
+                        if (assistantTextNode === null) {
+                            assistantContentDiv.replaceChildren();
+                            assistantTextNode = document.createTextNode('');
+                            assistantContentDiv.appendChild(assistantTextNode);
                         }
-                        if (typeof data.content === 'string') {
-                            fullContent += data.content;
-                            assistantContentDiv.textContent = fullContent;
-                            scrollToBottom();
+
+                        assistantTextNode.appendData(data.content)
+
+
+                        fullContent += data.content;
+                        //assistantContentDiv.textContent = fullContent;
+                        //assistantContentDiv.append(data.content)
+                        scrollToBottom();
+                    }
+                } else if (enventName === 'app_err') {
+                    errorMessage = typeof data.error?.message === 'string' ? data.error.message :
+                        typeof data.error === 'string' ? data.error : '生成失败!';
+                    console.warn('SSE error,request_id =', data.request_id);
+                } else if (enventName === 'done') {
+                    // 可选:可以设置标记,用来区分,正常结束还是意外终止.
+                } else {
+                    // 兼容旧服务端：没有 event: 字段时仍按字段猜
+                    if (typeof data.content === 'string' && data.content !== '') {
+                        if (!assistantTextNode) {
+                            assistantContentDiv.replaceChildren();
+                            assistantTextNode = document.createTextNode('');
+                            assistantContentDiv.appendChild(assistantTextNode);
                         }
-                    } catch (parseErr) {
-                        console.error('SSE JSON解析失败：', parseErr.message, dataStr);
+
+                        assistantTextNode.appendData(data.content)
+
+
+                        fullContent += data.content;
+                        //assistantContentDiv.textContent = fullContent;
+                        //assistantContentDiv.append(data.content)
+                        scrollToBottom();
+                    } else if (typeof data.error === 'string') {
+                        errorMessage = data.error;
                     }
                 }
             }
+
         }
 
         if (errorMessage) {
@@ -489,9 +539,19 @@ function stopGenerat() {
 
 }
 
+let scrollRafId = null;
+
+/**
+ * 请求滚动到底部。
+ * 同一帧内的多次调用会合并成一次，避免每个 token 都强制布局。
+ */
 function scrollToBottom() {
-    const chatMessages = document.getElementById('chat-messages');
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    if (scrollRafId !== null) return;          // 本帧已排过队，直接返回
+    scrollRafId = requestAnimationFrame(() => {
+        scrollRafId = null;                    // 先复位，下次还能再排
+        const chatMessages = document.getElementById('chat-messages');
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
 }
 
 
