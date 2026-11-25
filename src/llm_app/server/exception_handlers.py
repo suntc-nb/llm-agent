@@ -54,13 +54,13 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
         '%s',
         str(app_exc),
         extra={
-            'reqest_id': request_id,
+            'request_id': request_id,
             'error_code': app_exc.code,
             'http_status': app_exc.http_status,
             'details': app_exc.details,
-            'interanl_details': app_exc.internal_details,
+            'internal_details': app_exc.internal_details,
         },
-        exc_info=app_exc if app_exc.log_level >= logging.ERROR else False,
+        exc_info=app_exc if app_exc.log_level >= logging.ERROR else None,
     )
     return _error_response(
         status_code=app_exc.http_status,
@@ -108,11 +108,12 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
     """
     app_exc = cast(StarletteHTTPException, exc)
     request_id = _get_request_id(request=request)
-
+    internal_details: Any = None
     # 5xx 不向客户端泄露内部细节
     if app_exc.status_code >= 500:
         message = '服务器内部错误'
         details = None
+        internal_details = app_exc.detail
     elif isinstance(app_exc.detail, str):
         message = app_exc.detail
         details = None
@@ -130,7 +131,8 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
             'request_id': request_id,
             'error_code': f'HTTP_{app_exc.status_code}',
             'http_status': app_exc.status_code,
-            'details': details,
+            'details': details,  # 对外字段，5xx 为 None
+            'internal_details': internal_details,  # 仅内部排障，5xx 时保留原始 detail
         },
         exc_info=app_exc if log_level >= logging.ERROR else False,
     )
