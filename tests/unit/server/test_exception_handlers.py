@@ -162,3 +162,37 @@ def test_validation_error_sanitizes_input(client: TestClient) -> None:
     # assert all(set(item.keys()) == {'loc', 'msg', 'type'} for item in details)
 
     assert 'secret' not in resp.text
+
+
+def test_sqlalchemy_error_hides_internal_message(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger='llm_app.server.exception_handlers'):
+        resp = client.get('/db-error')
+        body = resp.json()
+        records = [r for r in caplog.records if r.name == 'llm_app.server.exception_handlers']
+
+    # TODO: 500 / code == 'DATABASE_ERROR'
+    # TODO: 'supersecret' 不在 resp.text 里
+    # TODO: 日志 levelno == ERROR 且 exc_info is not None
+
+    assert resp.status_code == 500
+    assert body['code'] == 'DATABASE_ERROR'
+    assert 'supersecret' not in resp.text
+    assert getattr(records[0], 'levelno', None) == logging.ERROR
+    assert getattr(records[0], 'exc_info', None) is not None
+
+
+def test_unhandled_exception_hides_internal_message(client: TestClient) -> None:
+    resp = client.get('/boom', headers={'X-Request-ID': 'rid-boom'})
+    body = resp.json()
+
+    # TODO: 500 / code == 'INTERNAL_ERROR'
+    # TODO: 'supersecret' 不在 resp.text 里
+    # TODO: body['request_id'] == 'rid-boom'
+    # TODO: resp.headers['x-request-id'] == 'rid-boom'
+    assert resp.status_code == 500
+    assert body['code'] == 'INTERNAL_ERROR'
+    assert 'supersecret' not in resp.text
+    assert body['request_id'] == 'rid-boom'
+    assert resp.headers['x-request-id'] == 'rid-boom'

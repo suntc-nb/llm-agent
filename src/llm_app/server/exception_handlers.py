@@ -157,7 +157,7 @@ async def sqlalchemy_exception_handler(request: Request, exc: Exception) -> JSON
         exc_info=db_exc,
         extra={
             'request_id': request_id,
-            'error_code': 'DATABASE_ERROR',  # 或 DATABASE_ERROR
+            'error_code': 'DATABASE_ERROR',
             'exception_type': type(exc).__name__,
         },
     )
